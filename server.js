@@ -1,27 +1,38 @@
 const http = require('http');
-const { Command } = require('commander');
-const program = new Command();
+const fs = require('fs').promises;
+const path = require('path');
 
-program
-  .requiredOption('-h, --host <host>', 'адреса сервера')
-  .requiredOption('-p, --port <port>', 'порт сервера')
-  .requiredOption('-c, --cache <path>', 'шлях до директорії кешу');
+const port = 3000;
 
-program.parse(process.argv);
+// Функція для обробки HTTP запитів
+const requestHandler = async (req, res) => {
+    const code = req.url.slice(1); // Отримуємо код з URL
+    const imagePath = path.join(__dirname, 'images', `${code}.jpg`); // Вказуємо шлях до картинки
 
-const { host, port, cache } = program.opts();
+    try {
+        // Перевіряємо, чи файл існує
+        await fs.access(imagePath);
+        
+        // Читаємо файл
+        const image = await fs.readFile(imagePath);
+        res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        res.end(image);
+    } catch (error) {
+        // Якщо файл не знайдено, повертаємо 404
+        if (error.code === 'ENOENT') {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('Image not found');
+        } else {
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Internal Server Error');
+        }
+    }
+};
 
-if (!host || !port || !cache) {
-  console.error('Усі параметри є обовʼязковими: --host, --port, --cache');
-  process.exit(1);
-}
+// Створюємо сервер
+const server = http.createServer(requestHandler);
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Server start!\n');
-});
-
-server.listen(port, host, () => {
-  console.log(`Сервер запущений на http://${host}:${port}/`);
-  console.log(`Кеш директорія: ${cache}`);
+// Запускаємо сервер
+server.listen(port, () => {
+    console.log(`Server is running at http://localhost:${port}`);
 });
