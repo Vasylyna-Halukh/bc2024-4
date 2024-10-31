@@ -1,86 +1,103 @@
-const http = require('http');
 const fs = require('fs').promises;
+const http = require('http');
 const path = require('path');
+const superagent = require('superagent');
 
-const port = 3000;
 const imagesDir = path.join(__dirname, 'images');
 
-const ensureImagesDirExists = async () => {
-    try {
-        await fs.mkdir(imagesDir, { recursive: true });
-    } catch (error) {
-        console.error('Error creating images directory:', error);
-    }
-};
+const supportedStatusCodes = [100, 200, 301, 400, 404, 500]; // Додайте інші підтримувані коди
 
-const requestHandler = async (req, res) => {
-    const code = req.url.slice(1); // Отримуємо код з URL
-    const imagePath = path.join(imagesDir, `${code}.jpg`); // Вказуємо шлях до картинки
+const server = http.createServer(async (req, res) => {
+  const { method, url } = req;
+  const statusCode = Number(url.slice(1)); // Витягуємо код статусу з URL
 
-    switch (req.method) {
-        case 'GET':
+  if (!supportedStatusCodes.includes(statusCode)) {
+    res.writeHead(400); // Bad Request
+    res.end(`Error 400: Status code ${statusCode} is not supported`);
+    return;
+  }
+
+  const filePath = path.join(imagesDir, `${statusCode}.jpg`);
+
+  try {
+    switch (method) {
+      case 'GET':
+        try {
+          const data = await fs.readFile(filePath);
+          res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+          res.end(data);
+        } catch (error) {
+          if (error.code === 'ENOENT') {
             try {
-                await fs.access(imagePath); // Перевіряємо, чи існує файл
-                const image = await fs.readFile(imagePath); // Читаємо файл
-                res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-                res.end(image);
-            } catch (error) {
-                console.error('Error reading image file:', error); // Логування помилки
-                if (error.code === 'ENOENT') {
-                    res.writeHead(404, { 'Content-Type': 'text/plain' });
-                    res.end('Image not found');
-                } else {
-                    res.writeHead(500, { 'Content-Type': 'text/plain' });
-                    res.end('Internal Server Error');
-                }
+              const response = await superagent.get(`https://http.cat/${statusCode}`);
+              await fs.writeFile(filePath, response.body);
+              res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+              res.end(response.body);
+            } catch (catError) {
+              console.error('Error fetching from http.cat:', catError);
+              res.writeHead(404);
+              res.end(`Error 404: File not found for status code ${statusCode}`);
             }
-            break;
+          } else {
+            console.error('Error reading file:', error);
+            res.writeHead(500);
+            res.end('Internal Server Error: Unable to read file');
+          }
+        }
+        break;
 
-        case 'PUT':
-            let body = [];
-            req.on('data', chunk => {
-                body.push(chunk);
-            });
-            req.on('end', async () => {
-                const imageBuffer = Buffer.concat(body);
-                try {
-                    await fs.writeFile(imagePath, imageBuffer); // Записуємо картинку
-                    res.writeHead(201, { 'Content-Type': 'text/plain' });
-                    res.end('Image created/updated');
-                } catch (error) {
-                    res.writeHead(500, { 'Content-Type': 'text/plain' });
-                    res.end('Internal Server Error');
-                }
-            });
-            break;
+      case 'PUT':
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('end', async () => {
+          const buffer = Buffer.concat(chunks);
+          try {
+            await fs.writeFile(filePath, buffer);
+            res.writeHead(201); // Created
+            res.end('Image created/updated successfully');
+          } catch (error) {
+            console.error('Error writing file:', error);
+            res.writeHead(500);
+            res.end('Internal Server Error: Unable to write file');
+          }
+        });
+        req.on('error', error => {
+          console.error('Request error:', error);
+          res.writeHead(500);
+          res.end('Internal Server Error');
+        });
+        break;
 
-        case 'DELETE':
-            try {
-                await fs.unlink(imagePath); // Видаляємо файл
-                res.writeHead(200, { 'Content-Type': 'text/plain' });
-                res.end('Image deleted');
-            } catch (error) {
-                if (error.code === 'ENOENT') {
-                    res.writeHead(404, { 'Content-Type': 'text/plain' });
-                    res.end('Image not found');
-                } else {
-                    res.writeHead(500, { 'Content-Type': 'text/plain' });
-                    res.end('Internal Server Error');
-                }
-            }
-            break;
+      case 'DELETE':
+        try {
+          await fs.unlink(filePath);
+          res.writeHead(200);
+          res.end('Image deleted successfully');
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            res.writeHead(404);
+            res.end(`Error 404: File not found for status code ${statusCode}`);
+          } else {
+            console.error('Error deleting file:', error);
+            res.writeHead(500);
+            res.end('Internal Server Error: Unable to delete file');
+          }
+        }
+        break;
 
-        default:
-            res.writeHead(405, { 'Content-Type': 'text/plain' });
-            res.end('Method not allowed');
-            break;
+      default:
+        res.writeHead(405); // Method Not Allowed
+        res.end(`Error 405: ${method} method not supported`);
     }
-};
+  } catch (error) {
+    console.error('Unexpected error:', error);
+    res.writeHead(500);
+    res.end('Internal Server Error');
+  }
+});
 
-const server = http.createServer(requestHandler);
-
-ensureImagesDirExists().then(() => {
-    server.listen(port, () => {
-        console.log(`Server is running at http://localhost:${port}`);
-    });
+// Start the server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server is listening on port ${PORT}`);
 });
